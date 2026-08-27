@@ -8,22 +8,22 @@ plugins:
 
 #-------------------------------
 # General Site Settings
-title: Johnny Hopkins
-description: "Hi I'm Johnny, and I'm a Data Scientist.  My portfolio focuses on interesting projects I've recently undertaken, with a strong emphasis on business impact. Please visit my Github & LinkedIn pages (or download my Resume) by using the links below!"
+title: Christine Dowling
+description: "Hi I'm Christine, a data science and machine learning professional. This page features a selection of projects I've worked on showcasing different skills and the range of business problems data science can be used for. In each project I describe my methodology and results, along with any other interesting insights I gained. If you'd like to view the code supporting these projects, please visit my Github at the link below. If you'd like to connect, you can donwload my resume or connect via LinkedIn"
 baseurl: "" # the subpath of your site, e.g. /blog
 url: "" # the base hostname & protocol for your site, e.g. http://example.com
 
 #-------------------------------
 # About Section
 subtitle: Data Science <span style="color:#f58506"> Portfolio </span>
-location: "London, UK"
+location: "Calgary, AB, Canada"
 resume_url: /docs/resume.docx
-avatar_image: /img/profile_picture.JPG
+avatar_image: /img/profile_picture.jpeg
 
 #-------------------------------
 # Contact links
-linkedln: "https://linkedln.com/#" # Add your linkedln handle
-github: "https://github.com/#"  # Add your github handle
+linkedln: "https://linkedin.com/in/christine-dowling-a92844116" # Add your linkedln handle
+github: "https://github.com/cadowling/project-portfolio"  # Add your github handle
 
 paginate: 6
 paginate_path: "/page/:num"
