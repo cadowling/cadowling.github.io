@@ -2,16 +2,14 @@
 layout: post
 title: Measuring Anti-Money Laundering Program Effectiveness
 image: "/posts/aml-transaction-monitoring-title-img.png"
-tags: [EDA, Feature Engineering, Data Visualization, XGBoost, DuckDB, Python, Tableau]
+tags: [EDA, Feature Engineering, Data Visualization, DuckDB, XGBoost, scikit-learn, Optuna, SQL, Python, Tableau]
 ---
 
 In this project I build a complete **anti-money laundering transaction monitoring pipeline** on 9.5 million banking transactions, and then measure how effective it actually is.
 
-I start by completing exploratory data analysis to build the risk profile of the dataset. 
+I start by completing exploratory data analysis to build the risk profile of the dataset. Next, I build a **rule-based system** which tries to capture behavior associated with the different fraud typologies which acts as a baseline. Given the imbalanced nature of the dataset and goal of the program (to capture criminal behaviour) I also designed metrics and relevant KPIs focused on the alerts produced and time spent investigating. After establishing this baseline I added in a **machine learning model** and measured its impact in terms of time or effort saved and produced an interactive dashboard showcasing my findings. 
 
-I start by building the kind of **rule-based system** a real bank runs today, and score it honestly: how many alerts it produces, how many are worth investigating, how much analyst time it consumes, and which kinds of laundering it simply cannot see. I then add a **machine learning model** on top and measure what it buys. Due to the imbalanced nature of the dataset, metrics focus on analyst days saved and the types of criminal behaviour caught, rather than accuracy.
-
-The insight running through the whole project is that a detection model is only half the story. A bank does not care how well a model ranks transactions in the abstract; it cares how many people it needs to employ to work the resulting queue. **Model quality and program effectiveness are different questions, and only the second one gets funded.**
+This project taught me how to connect data analysis with real-world outcomes, highlighting the difference between model quality or performance and effectiveness when real-world costs and variables are introduced into the analysis. Additionally, this project provided an opportunity to further develop my data storytelling and visualizations skills, by creating compelling dashboards which supported and enhanced my findings. 
 
 # Table of Contents
 
@@ -36,19 +34,17 @@ ___
 
 ### Context <a name="overview-context"></a>
 
-**Money laundering** is the process of moving criminally obtained money through the banking system until it appears legitimate. Banks are legally required to watch for it, and the system they use is called **transaction monitoring**: a set of rules that scan every transaction and raise an **alert** whenever something looks suspicious. A human analyst then investigates each alert and decides whether to escalate it.
+**Money laundering** is the process of moving criminally obtained money through the banking system until it appears legitimate. In Canada banks and financial institutions are legally required to watch for it, and the system they use is called **transaction monitoring**: a set of rules that scan every transaction and raise an **alert** whenever something looks suspicious. A human analyst then investigates each alert and decides whether to escalate it.
 
-The problem is volume. Real transaction monitoring systems are notorious for **false positives** — alerts that turn out to be perfectly innocent behaviour. Industry-wide, somewhere between 95% and 99% of AML alerts are closed with no further action. Every one of those still had to be read, investigated and documented by a person.
+One of the major problems in this areas is volume. Real transaction monitoring systems are notorious for creating **false positives**; that is, creating an alert or flagging an account where no illegal behaviour exists. This is a direct result of the imbalanced nature of the data (i.e. most transactions are legitimate) and reflected in industry stats, which claim somewhere between 95% and 99% of AML alerts are closed with no further action (NTD: add citation). But the imbalance is not restricted to the data, it's also present in the economics. A missed laundering network could result in hefty fines and a loss of money, however every alert (regardless if its fraudulent or not) has to be investigated and documented, costing analyst time. 
 
-This creates the question the project is really about: *given a fixed number of analysts, how do I catch the most laundering?* That is a question about the whole program, not about a model.
-
-The economics are also asymmetric. A missed laundering network can mean regulatory fines in the hundreds of millions and, more importantly, real criminal harm. A false alarm costs perhaps twenty-five minutes of an analyst's time. Those are different currencies, and balancing them is a business decision rather than a statistical one.
+This creates the question the project is really about: *given finite resources (analysts, time to investigate, etc.), how do I catch the most money laundering?* To answer this question, we need to look at more than just model performance, and instead focus on the whole program, taking into account the real cost of resources and trade-offs.
 
 ### Actions <a name="overview-actions"></a>
 
 I built an end-to-end pipeline that:
 
-* Loaded 9.5 million synthetic transactions using **DuckDB**, an analytics database that queries large files without loading them into memory
+* Loaded and queried the SAML-D synthetic dataset using **DuckDB**
 * Profiled the data to establish which behaviours actually carry risk signal
 * Engineered **behavioural features** — measures of how an account behaves over time, rather than facts about a single payment
 * Built a **rule engine** of eight monitoring scenarios modelled on real bank practice, and scored each one for alert volume, productivity and analyst cost
@@ -89,9 +85,11 @@ ___
 
 # 01. Data Overview <a name="data-overview"></a>
 
-I used **SAML-D**, a synthetic transaction monitoring dataset built by researchers at Bournemouth University in consultation with practising AML specialists. The transaction data itself was generated by a simulation, rather than taken from real customers and scrubbed of personal identifying information or anonymized. 
+I used **SAML-D**, a synthetic transaction monitoring dataset built by researchers at Bournemouth University in consultation with practising AML specialists. The transaction data itself was generated by a simulation, rather than taken from real customers and scrubbed of personal identifying information or anonymized. [NTD: add citation]
 
-The dataset contains **9,504,852 transactions**, of which **9,873 are laundering — 0.1039%**.
+[DuckDB was used here since it allows us to query large files without loading them into memory]
+
+The dataset contains **9,504,852 transactions**, of which **9,873 are laundering — 0.1039%**. The data covers **855,460 accounts**, of which only **7,902 ever touch a suspicious transaction.**
 
 | Column | Meaning |
 |---|---|
@@ -104,21 +102,7 @@ The dataset contains **9,504,852 transactions**, of which **9,873 are laundering
 | `Is_laundering` | Target: 1 = laundering, 0 = normal |
 | `Laundering_type` | Which pattern of laundering (or normal behaviour) this belongs to |
 
-That last column is unusually valuable. A **typology** is a named pattern of criminal behaviour, and the dataset labels 17 distinct suspicious ones alongside 11 normal ones. The largest suspicious groups were:
-
-```
-Structuring           1,870      Bipartite               383
-Cash_Withdrawal       1,334      Cycle                   382
-Deposit-Send            945      Fan_In                  364
-Smurfing                932      Gather-Scatter          354
-Layered_Fan_In          656      Behavioural_Change_2    345
-Layered_Fan_Out         529      Scatter-Gather          338
-Stacked Bipartite       506      Single_large            250
-Behavioural_Change_1    394      Fan_Out                 237
-                                 Over-Invoicing           54
-```
-
-In plain terms, a few of these are:
+That last column is unusually valuable. A **typology** is a named pattern of criminal behaviour, and the dataset labels 17 distinct suspicious ones alongside 11 normal ones. In plain terms, a few of the fraudulent ones are:
 
 * **Structuring** (also called *smurfing*) — breaking one large payment into many small ones to stay under reporting thresholds
 * **Fan-out** — one account rapidly paying out to many different recipients
@@ -127,7 +111,7 @@ In plain terms, a few of these are:
 * **Layering** — deliberately adding hops between the crime and the cash to obscure the trail
 
 <br>
-**Why this matters:**  Having typologies labelled means I can ask a far more useful question than "how accurate is my model". I can ask **"which kinds of criminal behaviour can my program actually see?"** — which is precisely the question a regulator asks.
+**Why this matters:**  Having typologies labelled means I can ask a far more useful question than "how accurate is my model". I can ask **"which kinds of criminal behaviour can my program actually see?"**.
 
 I also profiled the risk carried by each attribute. Cash and cross-border payments were roughly ten times riskier than routine electronic transfers:
 
@@ -142,8 +126,6 @@ I also profiled the risk carried by each attribute. Cash and cross-border paymen
 
 Destination country mattered even more, with the riskiest payment corridors running from the UK to Morocco (0.660%), Nigeria (0.645%) and Albania (0.579%) — against a baseline of 0.104%.
 
-The data covers **855,460 accounts**, of which only **7,902 ever touch a suspicious transaction.**
-
 ___
 
 # 02. Why Program Effectiveness Is Not Model Accuracy <a name="effectiveness-overview"></a>
@@ -152,12 +134,14 @@ Before building anything, I had to settle what "good" means. Three commonly used
 
 **Accuracy is useless.** Predicting "not laundering" for all 9.5 million transactions scores **99.896%** while catching nothing at all. Any optimiser given accuracy as a target will find that answer immediately and stop.
 
-**ROC-AUC is optimistically biased.** *ROC-AUC* summarises how well a model separates the two classes, but it measures false alarms as a share of the enormous innocent majority. Flagging 10,000 legitimate transactions barely moves the number, while representing months of analyst work. My own results show the gap clearly: the model scored **0.9959 ROC-AUC** but only **0.8246 PR-AUC**. The first number flatters it; the second describes it.
+**ROC-AUC is optimistically biased.** *ROC-AUC* summarises how well a model separates the two classes, but it measures false alarms as a share of the enormous innocent majority. Flagging 10,000 legitimate transactions barely moves the number, while representing months of analyst work. 
 
 **PR-AUC is the honest choice.** *Precision-recall AUC* ignores the innocent majority entirely, so the model gets no credit for the easy cases. Two terms it depends on are worth defining plainly:
 
 * **Precision** — of the alerts I raised, what fraction were genuinely suspicious? In AML this is called **alert productivity**.
 * **Recall** — of all the laundering that actually happened, what fraction did I catch?
+
+My own results show the gap clearly: the model scored **0.9959 ROC-AUC** but only **0.8246 PR-AUC**. The first number flatters it; the second describes it.
 
 But even PR-AUC is not the real objective. The measures that decide whether an AML program is working are operational:
 
@@ -366,6 +350,8 @@ ___
 
 # 08. Results Comparison <a name="results-comparison"></a>
 
+<iframe seamless frameborder="0" src="https://public.tableau.com/views/AMLProgramEffectiveness/AMLProgramEffectiveness?:embed=yes&:display_count=yes&:showVizHome=no" width = '1090' height = '900'></iframe>
+
 | Approach | Alerts | Productivity | Recall | Analyst days |
 |---|---|---|---|---|
 | Rules only — full queue | | | | |
@@ -383,7 +369,7 @@ All rows are scored on the same held-out test period.
 | **Model triage** | The *order* alerts are worked in | One model, retrained periodically | Large capacity savings; adds no regulatory risk since no rule is switched off | Cannot detect anything the rules missed |
 | **Hybrid detection** | Which accounts are looked at | Model plus governance overhead | Only option that raises the detection ceiling | Requires model explainability for regulators |
 
-The way to read this is that **triage and detection are different products.** Triage makes the existing program cheaper and is comparatively easy to get approved, because no rule is being turned off. Hybrid detection makes the program *better* but requires a bank to justify a model-driven alert to a regulator. Most institutions do the first before attempting the second, and the ordering in this project reflects that.
+The way to read this is that **triage and detection are different products.** Triage makes the existing program cheaper and is comparatively easy to get approved, because no rule is being turned off. Hybrid detection makes the program *better* but requires an institution to justify a model-driven alert to a regulator. Most institutions do the first before attempting the second, and the ordering in this project reflects that.
 
 ___
 
