@@ -5,15 +5,17 @@ image: "/posts/aml-transaction-monitoring-title-img.png"
 tags: [EDA, Feature Engineering, Data Visualization, DuckDB, XGBoost, scikit-learn, Optuna, SQL, Python, Tableau]
 ---
 
-In this project I build a complete **anti-money laundering transaction monitoring pipeline** on 9.5 million banking transactions, and then measure how effective it actually is.
+In this project I build a complete **anti-money laundering transaction monitoring pipeline** on a synthetic dataset, and then measure how effective it actually is.
 
-I start by completing exploratory data analysis to build the risk profile of the dataset. Next, I build a **rule-based system** which tries to capture behavior associated with the different fraud typologies which acts as a baseline. Given the imbalanced nature of the dataset and goal of the program (to capture criminal behaviour) I also designed metrics and relevant KPIs focused on the alerts produced and time spent investigating. After establishing this baseline I added in a **machine learning model** and measured its impact in terms of time or effort saved and produced an interactive dashboard showcasing my findings. 
+I start by building a baseline (deterministic) **rule-based system** which tries to capture fraudulent behavior patterns by producing alerts or flags (which would be investigated by an analyst). I also design metrics and KPIs to measure the effectiveness of this baseline which focus on the quality of the alerts produced and time to investigate. 
 
-This project taught me how to connect data analysis with real-world outcomes, highlighting the difference between model quality or performance and effectiveness when real-world costs and variables are considered. Additionally, this project provided an opportunity to further develop my data storytelling and visualizations skills, by creating compelling dashboards which supported and enhanced my findings. 
+Next, I add in **machine learning layer** and study its impact on the metrics and KPIs; producing an **interactive dashboard** to display the findings. 
+
+This project taught me how to connect data analysis with real-world outcomes, highlighting the difference between model quality or performance and effectiveness when real-world costs and variables are considered. Additionally, this project provided an opportunity to further develop my data storytelling and visualizations skills, by creating compelling dashboards which supported my findings.
 
 [![AML Program Effectiveness dashboard: alert cost by rule, detection versus alert volume for three operating models, and typology coverage gaps](/img/posts/aml-dashboard-full.png)](https://public.tableau.com/app/profile/christine.dowling/viz/AMLProgramEffectiveness/AMLProgramEffectiveness)
 
-*The finished dashboard. **[Open the interactive version on Tableau Public →](https://public.tableau.com/app/profile/christine.dowling/viz/AMLProgramEffectiveness/AMLProgramEffectiveness)** — the capacity and operating-model controls are live.*
+*The interactive version of the dashboard is available **[here.](https://public.tableau.com/app/profile/christine.dowling/viz/AMLProgramEffectiveness/AMLProgramEffectiveness)** Capacity and operating-model can be toggled to see the impact the metrics.*
 
 # Table of Contents
 
@@ -23,12 +25,12 @@ This project taught me how to connect data analysis with real-world outcomes, hi
     - [Results](#overview-results)
     - [Growth/Next Steps](#overview-growth)
 - [01. Data Overview](#data-overview)
-- [02. Why Program Effectiveness Is Not Model Accuracy](#effectiveness-overview)
-- [03. Building Features From Almost Nothing](#feature-engineering)
-- [04. The Rule Engine Baseline](#rule-engine)
-- [05. The Machine Learning Model](#the-model)
+- [02. Measuring Program Effectiveness](#effectiveness-overview)
+- [03. Feature Engineering](#feature-engineering)
+- [04. Rule Engine Baseline](#rule-engine)
+- [05. Machine Learning Model Layer](#the-model)
 - [06. Rules vs Model vs Hybrid](#hybrid-comparison)
-- [07. Honest Limitations](#limitations)
+- [07. Limitations](#limitations)
 - [08. Results Comparison](#results-comparison)
 - [09. Growth & Next Steps](#growth-next-steps)
 
@@ -48,14 +50,12 @@ This creates the question the project is really about: *given finite resources (
 
 I built an end-to-end pipeline that:
 
-* Loaded and queried the SAML-D synthetic dataset using **DuckDB**
-* Profiled the data to establish which behaviours actually carry risk signal
-* Engineered **behavioural features** to measure how an account behaves over time, beyond payment metrics (i.e. date/time, amount)
-* Built a **rule engine** of eight monitoring scenarios modelled on real bank practice, and scored each one for alert volume, productivity and analyst cost
-* Trained an **XGBoost** classifier and evaluated it with metrics appropriate to a 0.1% event rate
+* Loaded and queried the SAML-D synthetic dataset
+* Conducted **exploratory data analysis** to better understand the risk profile of the dataset
+* Engineered **behavioural features** to measure how an account behaves over time, beyond payment metrics (e.g. date/time, amount)
+* Built a **rule engine** of eight monitoring scenarios and scored each one for alert volume, productivity and analyst cost
+* Trained and tuned an **XGBoost classifier** and evaluated it with metrics appropriate to a 0.1% event rate
 * Compared three operating models — rules alone, rules ranked by the model, and a hybrid — at matched analyst capacity
-
-Throughout, I split the data **chronologically** rather than randomly, so the model is always tested on a period that comes after everything it learned from.
 
 ### Results <a name="overview-results"></a>
 
@@ -84,7 +84,6 @@ Potential future enhancements include:
 * Validating the approach on a second dataset with different generation logic
 * Introducing new rules and measuring the lift or change in detection
 * Network-level detection, since laundering is a property of a *group* of accounts rather than any single one
-
 ___
 
 # 01. Data Overview <a name="data-overview"></a>
@@ -93,16 +92,16 @@ I used **SAML-D**, a synthetic transaction monitoring dataset built by researche
 
 [DuckDB was used here since it allows us to query large files without loading them into memory]
 
-The dataset contains **9,504,852 transactions**, of which **9,873 are laundering — 0.1039%**. From a slightly different perspective, the data covers **855,460 accounts**, of which only **7,902 ever touch a suspicious transaction.** A brief overview of the data:
+The dataset contains **9,504,852 transactions**, of which **0.1039% or 9,873 are laundering**. A brief overview of the schema:
 
 | Column | Meaning |
 |---|---|
 | `Date`, `Time` | When the transaction happened |
-| `Sender_account`, `Receiver_account` | Who paid whom |
+| `Sender_account`, `Receiver_account` | Transaction parties  |
 | `Amount` | Value of the payment |
 | `Payment_currency`, `Received_currency` | Currency sent and received |
 | `Sender_bank_location`, `Receiver_bank_location` | Countries involved |
-| `Payment_type` | Cash deposit, cheque, cross-border transfer, card, etc. |
+| `Payment_type` | Method use (i.e. Cash deposit, cheque, cross-border transfer, card, etc.) |
 | `Is_laundering` | Target: 1 = laundering, 0 = normal |
 | `Laundering_type` | Which pattern of laundering (or normal behaviour) this belongs to |
 
@@ -114,8 +113,9 @@ That last column is unusually valuable. A **typology** is a named pattern of cri
 * **Cycle** — money moving through a loop of accounts and returning to its origin
 * **Layering** — deliberately adding hops between the crime and the cash to obscure the trail
 
-<br>
-Having typologies labelled means I can ask a far more useful question than "how accurate is my model", instead allowing me to probe what kinds of criminal behaviour my program can actually see.
+Remainder of the typologies and their definitions are found in this paper [NTD: add citation]
+
+Having typologies labelled means I can look deeper into the model performance, beyond accuracy, instead allowing me to probe what kinds of criminal behaviour my program can actually see.
 
 I also profiled the risk carried by each attribute including payment type, payment currency, and the country initiating or receiving the payment. Cash and cross-border payments were roughly ten times riskier than routine electronic transfers:
 
@@ -130,10 +130,12 @@ I also profiled the risk carried by each attribute including payment type, payme
 
 Destination country mattered even more, with the riskiest payment corridors running to Morocco, Nigeria, and Albania; each representing a laundering rate which was 6.350, 6.211, and 5.574 times higher than the baseline, respectively.
 
+Data covers **855,460 accounts**, of which only **7,902 ever touch a suspicious transaction.**
+
 [NTD: add dashboard link for risk profile]
 ___
 
-# 02. Why Program Effectiveness Is Not Model Accuracy <a name="effectiveness-overview"></a>
+# 02. Measuring Program Effectiveness <a name="effectiveness-overview"></a>
 
 Before building anything, I needed to determine what metric(s) I would use to measure 'effectiveness' since traditional performance measures fall short:
 
@@ -142,7 +144,7 @@ had to settle what "good" means. Three commonly used measures are actively misle
 * *ROC-AUC* summarises how well a model separates the two classes, but it measures false alarms as a share of the enormous innocent majority, providing an optimistically biased measure of performance. Flagging 10,000 legitimate transactions barely moves the number, while representing months of analyst work.
 * *Precision-Recall AUC* measures precision (of the alerts I raised, what fraction are genuinely suspicious?) and recall (of all the laundering that actually happened, what fraction did I catch?).
 
-Out of the metrics mentioned here, PR-AUC is the most useful, but still isn't the real objective metrics should be operational in nature. Instead I've proposed the following metrics regarding analyst effort to determine how well a program is performing:   
+Out of the metrics mentioned here, PR-AUC is the most useful, but still isn't the real objective metrics should be operational in nature. Instead I've proposed the following metrics surrounding analyst effort to determine how well a program is performing:   
 
 | Metric | The question it answers |
 |---|---|
@@ -154,21 +156,21 @@ Out of the metrics mentioned here, PR-AUC is the most useful, but still isn't th
 
 ___
 
-# 03. Building Features From Almost Nothing <a name="feature-engineering"></a>
+# 03. Engineering Features<a name="feature-engineering"></a>
 
-SAML-D provides only twelve raw columns, and no information about the customer at all — no age of account, no occupation, no expected activity. Very little of that is useful on its own. For example, a large payment on its own tells me nothing; a large payment from an account that has been dormant for six months and has just paid out to eleven new recipients tells me a great deal.
+SAML-D provides only twelve raw columns, and no information about the customer at all (i.e. age of account, occupation, expected activity), which provides very little information on its own. For example, a large payment by itself tells me nothing; a large payment from an account that has been dormant for six months and has just paid out to eleven new recipients is far more informative.
 
-So the real work was **feature engineering** — deriving new measurements that describe *behaviour over time* rather than a single payment in isolation. I built these in DuckDB, which allowed me to use SQL within a notebook, computing rolling time windows across millions of rows far faster than standard Python tools.
+Therefore, in order to make use of this data I need to derive new measurements that describe an account's (client's) *behaviour over time* - also known as **feature engineering**. Rather than using Pandas to complete this task (given the size of the dataset), I built these in DuckDB, which allowed me to run  SQL-based queries within a notebook, computing rolling time windows across millions of rows far faster than standard Python tools.
 
-The features fall into five families:
+The features broadly fall into five families:
 
-* **Velocity** — how many transactions, and what total value, has this account sent or received in the last 1, 7 and 30 days?
-* **Counterparty spread** — how many *different* accounts has it dealt with recently? This is what exposes fan-in and fan-out patterns.
-* **Pass-through ratio** — does money leave this account almost as fast as it arrives, and in similar amounts? This is the classic signature of a **money mule**, an account used purely to relay funds.
+* **Velocity** — how many transactions, and what total value, has this account sent or received within a defined time period?
+* **Counterparty spread** — how many *different* accounts has it dealt with recently?
+* **Pass-through ratio** — does money leave this account almost as fast as it arrives, and in similar amounts? 
 * **Dormancy** — how long was this account inactive before it suddenly started moving money?
 * **Behavioural change** — how unusual is this payment compared to that same account's own history?
 
-The single most important technical safeguard is that **every one of these windows only looks backwards.** If a feature were allowed to see the future, the model would appear brilliant in testing and fail completely in production. This is called **leakage**, and it is the most common way that machine learning projects quietly fool their authors.
+An important safeguard which became apparent after designing these features was that **every one of these windows only looks backwards.** If a feature were allowed to see the future, the model would appear brilliant in testing and fail completely in production. This is called **leakage**, and it is the most common way that machine learning projects quietly fool their authors.
 
 <br>
 **Why this matters:**  I also split train and test **by date** rather than randomly. With behavioural features, a random split lets the model learn from transactions that happen after the ones it is being tested on — which is impossible in real life and inflates every number.
