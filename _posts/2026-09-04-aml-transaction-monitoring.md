@@ -347,7 +347,7 @@ ___
 
 # 08. Results Comparison <a name="results-comparison"></a>
 
-<iframe seamless frameborder="0" src="https://public.tableau.com/views/AMLProgramEffectiveness/AMLProgramEffectiveness?:embed=yes&:display_count=yes&:showVizHome=no" width = '1090' height = '900'></iframe>
+
 
 | Approach | Alerts | Productivity | Recall | Analyst days |
 |---|---|---|---|---|
