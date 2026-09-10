@@ -133,18 +133,18 @@ Destination country mattered even more, with the riskiest payment corridors runn
 Data covers **855,460 accounts**, of which only **7,902 ever touch a suspicious transaction.**
 
 [NTD: add dashboard link for risk profile]
+
 ___
 
 # 02. Measuring Program Effectiveness <a name="effectiveness-overview"></a>
 
 Before building anything, I needed to determine what metric(s) I would use to measure 'effectiveness' since traditional performance measures fall short:
 
-* Due to the highly imbalanced nature of the dataset, *Accuracy* is not a useful measure. Predicting "not laundering" for all 9.5 million transactions scores **99.896%** while catching nothing at all. Any optimiser given accuracy as a target will find that answer immediately and stop. 
-had to settle what "good" means. Three commonly used measures are actively misleading here.
-* *ROC-AUC* summarises how well a model separates the two classes, but it measures false alarms as a share of the enormous innocent majority, providing an optimistically biased measure of performance. Flagging 10,000 legitimate transactions barely moves the number, while representing months of analyst work.
+* *Accuracy* measures the overall performance however, due to the highly imbalanced nature of the dataset, this is not a useful measure. Predicting "not laundering" for all 9.5 million transactions scores **99.896%** while catching no suspicious transactions. Any optimizer given accuracy as a target will find that answer immediately and stop. 
+* *ROC-AUC* summarises how well a model separates the two classes, but it measures false alarms as a share of the non-fraudulent majority, providing an optimistically biased measure of performance. Flagging 10,000 legitimate transactions barely moves the number, while representing months of analyst work.
 * *Precision-Recall AUC* measures precision (of the alerts I raised, what fraction are genuinely suspicious?) and recall (of all the laundering that actually happened, what fraction did I catch?).
 
-Out of the metrics mentioned here, PR-AUC is the most useful, but still isn't the real objective metrics should be operational in nature. Instead I've proposed the following metrics surrounding analyst effort to determine how well a program is performing:   
+Out of the metrics mentioned here, PR-AUC is the most useful, but still isn't the real objective as metrics should be operational in nature. Instead I proposed the following metrics surrounding **analyst effort** to determine how well a program is performing:   
 
 | Metric | The question it answers |
 |---|---|
@@ -170,32 +170,21 @@ The features broadly fall into five families:
 * **Dormancy** — how long was this account inactive before it suddenly started moving money?
 * **Behavioural change** — how unusual is this payment compared to that same account's own history?
 
-An important safeguard which became apparent after designing these features was that **every one of these windows only looks backwards.** If a feature were allowed to see the future, the model would appear brilliant in testing and fail completely in production. This is called **leakage**, and it is the most common way that machine learning projects quietly fool their authors.
+An important safeguard which became apparent after designing these features was that chronology would be important to preserve. Every one of these windows only looks **backwards.** This has implications for splitting the data into training and testing, any cross-validation, as well as sampling. Effectively, I needed to ensure that features didn't contain a mix of past and future data (also known as **leakage**) which could artificially inflate the model's performance. To deal with this, I split train and test **by date** rather than randomly, so that the model doesn't learn from 'future transactions'. This split was also applied to the rule engine to ensure all options were scored on the same unseen data.  
 
-<br>
-**Why this matters:**  I also split train and test **by date** rather than randomly. With behavioural features, a random split lets the model learn from transactions that happen after the ones it is being tested on — which is impossible in real life and inflates every number.
+### Sampling
 
-The same discipline applies to the rule engine: its thresholds are **calibrated on the training period and scored on the test period**, so the rules and the model are always judged on the same unseen data.
+Computing rolling windows across 9.5 million transactions is expensive, so I sampled. But sampling *transactions* at random would have destroyed the features above including velocity and counterparties.
 
-I then ran a deliberate **leakage tripwire**: scoring each feature's predictive power on its own. If any single feature had scored near-perfectly, it would have meant something was secretly encoding the answer. The strongest was dormancy at 0.734 — high enough to be useful, low enough to be believable.
+Here I sampled **whole accounts**: every account involved in any laundering, plus a random selection of clean ones, keeping all of their transactions. That preserved behaviour intact and left **2,461,050 transactions containing all 9,873 laundering cases.**
 
-One finding here was genuinely useful: two features I had expected to matter, proximity to a £10,000 reporting threshold and round-number amounts, scored **0.495 and 0.500** — statistically indistinguishable from a coin flip. SAML-D simply does not model a cash-reporting threshold. I removed them from the model but deliberately **kept them in the rule engine**, for reasons that become clear below.
-
-### Making 9.5 million rows tractable
-
-Computing rolling windows across 9.5 million transactions is expensive, so I sampled. But sampling *transactions* at random would have destroyed the very features I had just built — you cannot measure how many counterparties an account dealt with if you have thrown away half of them.
-
-Instead I sampled **whole accounts**: every account involved in any laundering, plus a random selection of clean ones, keeping all of their transactions. That preserved behaviour intact and left **2,461,050 transactions containing all 9,873 laundering cases.**
-
-The side effect is that laundering now looks about four times more common than it really is. I measured that enrichment precisely (**3.874×**) and corrected for it whenever reporting results, because otherwise every estimate of analyst workload would have been four times too optimistic.
+The side effect is that laundering now looks about four times more common than it really is. I measured that enrichment precisely (**3.874×**) and corrected for it whenever reporting results, otherwise every estimate of analyst workload would have been almost four times too optimistic.
 
 ___
 
 # 04. The Rule Engine Baseline <a name="rule-engine"></a>
 
-Before adding any machine learning, I built a hypothetical system a financial institution would run today. This ordering is deliberate since the value of any model can only be expressed in relation to a baseline. 
-
-I implemented eight monitoring scenarios:
+Before adding any machine learning, I built a simple, hypothetical, rule-based system akin to a transaction monitoring system which might exist today. This provided insight on the amount of coverage a system like this might have, as well as a baseline for assessing the value of any machine learning model additions down the road. For simplicity, I implemented eight rules which targeted different monitoring scenarios:
 
 | Rule | What it looks for |
 |---|---|
@@ -210,121 +199,164 @@ I implemented eight monitoring scenarios:
 
 Two design decisions were important.
 
-**Thresholds are set per payment type.** My first attempt used one global amount threshold and the cash rule never fired once. The reason was instructive: cash withdrawals in this data top out around **£342**, while electronic transfers reach **£48,000**. A single threshold is meaningless across distributions that differ by two orders of magnitude.
+**Thresholds are set per payment type.** My first attempt used one global amount threshold and the cash rule never fired once. The reason for this was that different payment types had vastly different caps, making a single threshold useless.
 
-**Alerts are grouped by account and day, not by transaction.** Real monitoring systems raise one alert per account per scenario per day — an analyst investigates *an account*, not each individual payment. This collapses roughly five rule hits into every one alert, and skipping it would have inflated the apparent workload by the same factor.
-[[The rule engine reproduced the central problem of real AML programs: a very large alert queue in which the overwhelming majority of alerts are innocent.]]
+**Alerts are grouped by account and day, not by transaction.** Real monitoring systems raise one alert per account per scenario per day since analysts investigate *an account*, not each individual payment. This collapses roughly five rule hits into every one alert, and prevents artificial inflation of the workload.
+
 
 ### Results
 
-*[To be completed from the test-period run.]*
+| Rule | Alerts | Productive | Productivity | Recall | Analyst days | Unique |
+|---|---|---|---|---|---|---|
+| `R08_LARGE_CASH` | 380 | 87 | **22.89%** | 2.8% | 26 | 68 |
+| `R07_XCCY_LAYER` | 4,022 | 230 | 5.72% | 8.2% | 279 | 132 |
+| `R03_HR_CORRIDOR` | 1,510 | 76 | 5.03% | 2.5% | 105 | 34 |
+| `R05_FAN_IN` | 11,980 | 267 | 2.23% | 9.2% | 832 | 143 |
+| `R06_DORMANT` | 6,732 | 70 | 1.04% | 2.3% | 468 | 55 |
+| `R04_FAN_OUT` | 85,757 | 653 | 0.76% | 25.0% | **5,955** | 587 |
+| `R01_STRUCTURING` | 13,540 | 62 | 0.46% | 2.5% | 940 | **4** |
+| `R02_PASSTHROUGH` | 2,949 | 6 | **0.20%** | 0.2% | 205 | **2** |
 
-| Rule | Alerts | Productive | Productivity | Recall | Analyst days |
-|---|---|---|---|---|---|
-| `R08_LARGE_CASH` | | | | | |
-| `R07_XCCY_LAYER` | | | | | |
-| `R03_HR_CORRIDOR` | | | | | |
-| `R05_FAN_IN` | | | | | |
-| `R06_DORMANT` | | | | | |
-| `R04_FAN_OUT` | | | | | |
-| `R01_STRUCTURING` | | | | | |
-| `R02_PASSTHROUGH` | | | | | |
+**Portfolio total: 126,870 rule-alerts, 1.14% productive, 8,810 analyst-days.**
 
-**Portfolio total:** *[alerts, productivity, recall, analyst-days]*
-
-Whatever the exact figure, a productivity rate of a few percent is not a failure of the exercise — it is a faithful reproduction of the industry's actual problem. Real transaction monitoring runs somewhere between 1% and 5% productivity.
+NOTE: While productivity rate appears very low, this is comparable to real transaction monitoring systems which run ~1-5% productivity. 
 
 ### The findings that matter
 
-**One rule dominates the cost base.** The fan-out scenario alone consumes the large majority of the investigation budget while delivering the largest single share of detections. It is simultaneously the most productive rule by volume and by far the most expensive per detection. That is a tuning conversation, not a deletion — and it is the first thing I would put in front of a head of financial crime.
+**One rule dominates the cost base.** The fan-out scenario alone consumes the large majority of the investigation budget (5,955 analyst days, **68% percent of the budget**) while delivering the largest single share of detections (25% recall). It is simultaneously the most productive rule by volume and the most expensive per detection.
 
-**Two rules are close to worthless.** I measured **marginal value**: how much unique detection would be lost if a rule were switched off entirely. Structuring and pass-through generate tens of thousands of alerts and thousands of analyst-days between them, while contributing only a handful of detections that no other rule had already found.
+**Two rules are close to worthless.** I measured **marginal value** by looking at how many unique detections would be lost if a rule were switched off entirely. Structuring contributed **4 unique detections** for 13,540 alerts and 940 analyst-days. Pass-through contributed **2**, for 2,949 alerts. Between them: 16,489 alerts, 1,145 analyst-days, and 6 detections nothing else already found. 
 
-This is exactly why I kept the "dead" structuring features in the rule engine after removing them from the model. **A rule that burns 11% of the budget and finds almost nothing is a finding in its own right** — and it is the single most actionable thing on the dashboard.
+While findings might look like easy targets for cutting costs, removing or altering these rules should be a business decision which takes into account the real and full cost (i.e. the cost of missed laundering transactions). 
 
 **Coverage is deeply uneven.** The rule engine sees some behaviour almost perfectly and other behaviour barely at all:
 
-*[To be completed from the test-period run.]*
-
 | Typology | Cases | Caught | Coverage |
 |---|---|---|---|
-| Behavioural_Change_1 | | | |
-| Behavioural_Change_2 | | | |
-| Structuring | | | |
-| Fan_In | | | |
-| Deposit-Send | | | |
-| Cycle | | | |
-| Smurfing | | | |
-| Bipartite | | | |
-| Layered_Fan_Out | | | |
-
-Across the full dataset the spread ran from near-total coverage of simple behavioural changes down to roughly a fifth of layered fan-out structures.
+| Behavioural_Change_1 | 133 | 133 | **100.0%** |
+| Behavioural_Change_2 | 148 | 148 | 100.0% |
+| Fan_In | 102 | 61 | 59.8% |
+| Structuring | 556 | 321 | 57.7% |
+| Deposit-Send | 297 | 135 | 45.5% |
+| Cycle | 114 | 48 | 42.1% |
+| Layered_Fan_In | 179 | 40 | 22.3% |
+| Smurfing | 279 | 61 | 21.9% |
+| Bipartite | 63 | 10 | **15.9%** |
 
 <br>
-**Why this matters:**  That gap is the case for adding a model. The layered structures — deliberately designed to defeat simple rules — are exactly where a rules-only program is weakest, and exactly where sophisticated criminals operate.
+**The gap above is the case for adding a model.** Layered structures are deliberately designed to defeat simple rules and are exactly where sophisticated criminals operate.
 
 ___
 
 # 05. The Machine Learning Model <a name="the-model"></a>
 
-I trained an **XGBoost** classifier — a *gradient boosting* model, which builds many small decision trees in sequence with each one correcting the errors of those before it. It handles the messy, non-linear interactions in behavioural data well and copes natively with missing values, which matters here because an account's first ever transaction genuinely has no history.
+Taking some lessons from the Fraud Detection project, I trained an **XGBoost** classifier since it is appropriate for the messy, non-linear interactions in behavioural data. I also used Bayesian optimization (Optuna) to tune hyperparameters rather than using brute force (e.g. GridSearch). Two points differed from the previous project:
+
+* **Cross-validation must be chronological.** As mentioned in the feature engineering section above, preserving the chronology of transactions is important to prevent leakage. Standard cross-validation shuffles rows randomly, therefore I use rolling-origin folds where every validation period is strictly later than its training period.
+* **The objective is PR-AUC**, rather than accuracy or ROC-AUC for the reasons stated in section 02.
 
 ### Results
 
 | Metric | Value |
 |---|---|
-| ROC-AUC | 0.9959 |
-| PR-AUC (sampled) | 0.8870 |
-| **PR-AUC (population-corrected)** | **0.8246** |
-
-The features the model relied on most were the behavioural ones, not the transaction details:
-
-```
-snd_cnt_7d        0.283   sender's transaction count, last 7 days
-snd_n_cp_7d       0.181   sender's distinct counterparties, last 7 days
-rcv_cnt_7d        0.106   receiver's transaction count, last 7 days
-rcv_n_cp_7d       0.096   receiver's distinct counterparties, last 7 days
-rcv_cnt_1d        0.070   receiver's transaction count, last 24 hours
-```
-
-Payment amount contributed just **1.5%**. That matches AML practice: it is the *pattern of movement* that betrays laundering, not the size of any single payment.
-
-### Tuning
-
-*[To be completed from the notebook run.]*
-
-I tune the model with **Optuna**, which uses Bayesian optimisation to search hyperparameters intelligently rather than exhaustively. Two choices differ from a standard tuning setup:
-
-1. **Cross-validation must be chronological.** Standard cross-validation shuffles rows randomly, which with time-based features would let the model learn from the future. I use rolling-origin folds where every validation period is strictly later than its training period.
-2. **The objective is PR-AUC**, for the reasons in section 02.
-
-| Metric | Value |
-|---|---|
 | Trials | 30 |
-| Best cross-validated PR-AUC | |
-| Best parameters | |
-| Test PR-AUC (tuned) | |
-| Improvement over baseline | |
+| Best cross-validated PR-AUC | 0.8320 |
+| Baseline test PR-AUC (population-adjusted) | 0.8259 |
+| **Tuned test PR-AUC (population-adjusted)** | **0.8576** |
 
+The features the model relied on were behavioural, not transactional:
+
+```
+snd_cnt_7d        sender's transaction count, last 7 days
+snd_n_cp_7d       sender's distinct counterparties, last 7 days
+rcv_cnt_7d        receiver's transaction count, last 7 days
+rcv_n_cp_7d       receiver's distinct counterparties, last 7 days
+rcv_cnt_1d        receiver's transaction count, last 24 hours
+```
+
+Payment amount contributed under 2%. That is not surprising since the *pattern of movement* is typically what demonstrates laundering, not the size of any single payment.
+
+# 06. Thresholding <a name="thresholding"></a>
+
+The model produces a **score**, not a decision. Turning a score into an alert requires a cut-off, and that cut-off is not a hyperparameter — it is chosen after training, and it is the cheapest lever in the pipeline.
+
+The trap is choosing it on the test set. Sweeping thresholds on test and reporting the best one leaks the test set into the decision. So I swept **out-of-fold** predictions from the training period, reusing the same rolling-origin folds, so each score came from a model that never saw that row.
+
+| Strategy | Threshold | PR-AUC | Precision | Recall | Alerts | Missed |
+|---|---|---|---|---|---|---|
+| Default 0.5 | 0.5000 | 0.8576 | 0.9672 | 0.7699 | 2,467 | 713 |
+| Best F1 (OOF) | 0.2693 | 0.8576 | 0.9144 | 0.8203 | 2,780 | 557 |
+| Capacity (OOF) | 0.0223 | 0.8576 | 0.4106 | 0.9264 | 6,992 | 228 |
+
+**PR-AUC is identical on every row.** That is the clearest demonstration that thresholding does not improve the model. It cannot change how well the model *ranks*; it only chooses where to cut that ranking. Any PR-AUC gain has to come from the model, and any precision-recall trade comes from here.
+
+The default 0.5 is badly wrong, but in the opposite direction from most fraud problems: near-perfect precision while missing 23% of cases. It is tuned for a balanced problem that does not exist.
+
+<br>
+**Why this matters:**  The capacity-based row is the one an AML team actually operates under. The review team can work N alerts a day, so the threshold is set by headcount, not by any statistical criterion.
 ___
 
-# 06. Rules vs Model vs Hybrid <a name="hybrid-comparison"></a>
+# 07. Rules vs Model vs Hybrid <a name="hybrid-comparison"></a>
 
-*[To be completed from the notebook run.]*
+I compared three ways of operating the same program on the same held-out period.
 
-This is the section the whole project builds toward. I compare three ways of operating the same program, **at matched analyst capacity**:
+**A — Rules only.** The current state. Rules produce a queue with no priority order, so analysts work it in whatever order it arrives.
 
-**A — Rules only.** The current state. Rules produce a queue of alerts with no priority order, so analysts work it in whatever order it arrives.
+**B — Rules plus triage.** Exactly the same alerts, sorted by model score so the most likely productive ones surface first. **This detects nothing new.** Its entire value is ordering.
 
-**B — Rules plus triage.** Exactly the same alerts, but sorted by the model's score so the most likely productive ones surface first. **This detects nothing new.** Its entire value is ordering — which matters enormously the moment capacity is constrained.
+**C — Hybrid.** Rule alerts plus accounts the model flags that the rules never looked at. The only configuration that raises the ceiling.
 
-**C — Hybrid.** Rule alerts plus accounts the model flags that the rules never looked at. This is the only configuration that can raise the ceiling on how much is caught.
+Triage works by reordering, not by adding or removing. Each account-day alert inherits the **highest** model score among its transactions, and the queue is sorted by that score. An account-day containing one highly suspicious payment among twenty routine ones ranks high, where averaging would dilute it.
 
-| Config | Recall at 25% capacity | at 50% | at 100% | Effort saved at equal recall |
-|---|---|---|---|---|
-| A — Rules only | | | | |
-| B — Rules + triage | | | | |
-| C — Hybrid | | | | |
+### At matched capacity
+
+| Config | Alerts | Analysts | Caught | Detection | Productivity |
+|---|---|---|---|---|---|
+| **At 25% of current capacity** ||||||
+| A — Rules only | 27,210 | 27.4 | 389 | 6.9% | 1.43% |
+| B — Rules + triage | 27,210 | 27.4 | 1,297 | **23.0%** | 4.77% |
+| C — Hybrid | 27,210 | 27.4 | 4,377 | **77.6%** | 16.09% |
+| **At 100% of current capacity** ||||||
+| A — Rules only | 108,843 | 109.5 | 1,487 | 26.4% | 1.37% |
+| B — Rules + triage | 108,843 | 109.5 | 1,487 | 26.4% | 1.37% |
+| C — Hybrid | 108,843 | 109.5 | 4,600 | **81.6%** | 4.23% |
+
+Two things stand out. At a quarter of capacity, ranking alone more than triples detection for identical cost. And at full capacity A and B are **identical** — because if you work every alert, the order is irrelevant. All of triage's value exists under constraint, which is the permanent condition of every real AML team.
+
+### Inverted: what does a detection target cost?
+
+| Detection target | A — Rules only | B — Rules + triage | C — Hybrid |
+|---|---|---|---|
+| 5% | 19.6 analysts | 0.3 | 0.3 |
+| 10% | 39.6 | 0.6 | 0.6 |
+| 20% | **84.5** | **1.2** | **1.1** |
+| 25% | 103.5 | 70.2 | 1.4 |
+| 50% | beyond ceiling | beyond ceiling | 2.8 |
+| 80% | beyond ceiling | beyond ceiling | 65.7 |
+
+The 25% row is worth pausing on. Triage jumps from 1.2 analysts to 70.2, because ranking reaches ~23% almost free and then must grind the remaining queue for the last two points. That diminishing return is real, and it is what makes the case for the hybrid rather than merely better sorting.
+
+The blanks are also a finding. Rules cannot reach 30% at any cost — **26.4% is the structural ceiling of the ruleset**, and no amount of headcount changes it.
+
+### Closing the coverage gaps
+
+Compared at equal alert volume, the hybrid closes exactly the gaps the rules could not see:
+
+| Typology | Rules only | Hybrid | Gain |
+|---|---|---|---|
+| Bipartite | 10.3% | 94.9% | **+84.6pp** |
+| Layered_Fan_In | 15.4% | 91.7% | +76.3pp |
+| Smurfing | 17.9% | 91.9% | +74.1pp |
+| Cash_Withdrawal | 19.3% | 90.8% | +71.5pp |
+| Gather-Scatter | 17.0% | 88.3% | +71.3pp |
+
+<br>
+**[Explore this comparison interactively →](https://public.tableau.com/app/profile/christine.dowling/viz/AMLProgramEffectiveness/AMLProgramEffectiveness)**
+Move the capacity control to see detection and analyst headcount change across all three operating models.
+
+<br>
+**Why this matters:**  Triage makes the existing program cheaper and is comparatively easy to get approved, because no rule is switched off and no alert suppressed. Hybrid detection makes the program *better* but requires justifying a model-driven alert to a regulator. Most institutions do the first before attempting the second.
+
 
 The two questions this table answers are the two a head of financial crime actually asks:
 
@@ -335,6 +367,82 @@ The two questions this table answers are the two a head of financial crime actua
 
 ___
 
+# 08. Counting Honestly <a name="counting-honestly"></a>
+
+Two figures in this project both look like "the answer" and differ by a third. Both are correct; they count different things, and being explicit about which is which is most of the work.
+
+| | Rule scorecard | Program comparison |
+|---|---|---|
+| Alert unit | rule × account × day | account × day |
+| Alert count | 126,870 | 108,843 |
+| Analyst-days | 8,810 | 7,558 |
+| What "caught" means | suspicious *transactions* | suspicious *account-days* |
+| Denominator | 3,099 | 5,640 |
+
+When three rules fire on one account on one day, the scorecard counts three — that is how rule productivity is conventionally reported — but an analyst does one piece of work. And each suspicious transaction touches up to two account-days, one for the sender and one for the receiver, so 3,099 transactions expand to 5,640 distinct account-days.
+
+The dashboard uses **account-days throughout**, because that is the unit an analyst investigates.
+
+### The staffing arithmetic
+
+```
+alerts × 25 minutes ÷ 60 = analyst-hours
+analyst-hours ÷ 6 productive hours = analyst-days
+analyst-days ÷ 69 working days = analysts required
+```
+
+Six productive hours represents an eight-hour day less meetings, admin and training. The divisor is **working days, not calendar days** — the test period spans 97 calendar days but only 69 weekdays. Alerts accumulate seven days a week; the capacity to work them does not. Using calendar days would have understated headcount by 41%.
+
+<br>
+**Why this matters:**  Effort here measures what a detection target costs, **not a staffing recommendation**. All rule alerts still require disposition however they are prioritised — working only the top 1,210 leaves the rest un-dispositioned, which is a regulatory finding rather than an efficiency win.
+
+___
+
+# 09. Limitations <a name="limitations"></a>
+
+**Synthetic data is far more learnable than reality.** SAML-D's typologies are *generated* from counterparty-count and velocity patterns — precisely what my strongest features measure. To a real extent the model recovers the generator's own construction. A PR-AUC of 0.8576 on genuine banking data would be extraordinary. **The shape of these results is the finding; the magnitudes are a property of the dataset.**
+
+**The operational layer is illustrative.** No public dataset ships with real investigator outcomes, so 25 minutes per alert and 6 productive hours per day are stated assumptions, not measurements. Every derived number moves proportionally if you disagree with them.
+
+**There is no true alert-disposition ground truth.** I know which transactions were laundering, not which alerts a human would have escalated. "Productive alert" means "contained a genuinely suspicious transaction", which is an upper bound on what a real analyst would find.
+
+**Sub-one-analyst figures are arithmetic, not staffing.** No AML function can be staffed at 1.2 people regardless of queue mathematics — quality assurance, four-eyes review, escalation and holiday cover impose a floor unrelated to alert volume.
+
+___
+
+# 10. Results Comparison <a name="results-comparison"></a>
+
+| Approach | Alerts | Analysts | Detection | Productivity |
+|---|---|---|---|---|
+| Rules only — full queue | 108,843 | 109.5 | 26.4% | 1.37% |
+| Rules + triage — 25% capacity | 27,210 | 27.4 | 23.0% | 4.77% |
+| Hybrid — 25% capacity | 27,210 | 27.4 | 77.6% | 16.09% |
+| Rules only — 20% detection target | 84,627 | 84.5 | 20% | — |
+| Rules + triage — 20% detection target | 1,210 | 1.2 | 20% | — |
+
+All rows scored on the same held-out test period, in account-day units.
+
+### Summary of the three levers
+
+| | What it changes | Cost | Strengths | Limitations |
+|---|---|---|---|---|
+| **Rule tuning** | Which alerts exist | Analyst review of scenarios | Transparent, explainable to a regulator, no model risk | Blind to patterns nobody wrote a rule for |
+| **Model triage** | The *order* alerts are worked | One model, retrained periodically | Large capacity savings; no rule switched off | Cannot detect anything the rules missed |
+| **Hybrid detection** | Which accounts are looked at | Model plus governance overhead | Only option that raises the ceiling | Requires explainability for regulators |
+
+**Triage and detection are different products.** Triage makes the existing program cheaper and is comparatively easy to approve. Hybrid detection makes it *better* but requires a bank to defend a model-driven alert. The ordering in this project reflects the order most institutions attempt them.
+
+___
+
+# 11. Growth & Next Steps <a name="growth-next-steps"></a>
+
+* **A case management layer.** Synthesising analyst assignment, investigation duration and queue backlogs would let the dashboard show SLA breaches and case aging — the measures AML leadership reviews most often.
+* **Cost-based thresholds.** Replacing "alerts per analyst per day" with currency — expected laundering value detected against investigation cost — so the operating point is chosen on money.
+* **Network-level detection.** Laundering is a property of a *group* of accounts. Graph features, or a graph neural network, would model that directly instead of approximating it with counterparty counts.
+* **Validation on a second dataset.** Repeating the pipeline on the IBM AML dataset, which uses different generation logic, would separate genuine method from artefacts of SAML-D.
+* **Rule retirement simulation.** The marginal value analysis suggests two scenarios could be retired or rebuilt. Quantifying the freed capacity is a concrete deliverable a bank would act on.
+
+This project demonstrates that in financial crime detection the highest-leverage question is rarely *"how accurate is the model?"* It is **"where is my analyst capacity going, and what am I still unable to see?"** — and answering that takes an operational pipeline, not just a classifier.
 # 07. Honest Limitations <a name="limitations"></a>
 
 This section matters more than it usually would, and I would rather state it plainly than have someone find it.
