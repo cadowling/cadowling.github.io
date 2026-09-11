@@ -1,13 +1,13 @@
 ---
 layout: post
-title: Model Tuning and Optimization with Fraud Detection
+title: Credit Card Fraud Detection Model (Tuning and Optimization)
 image: "/posts/fraud-detection-tuning-title-img.png"
 tags: [Machine Learning, XGBoost, Hyperparameter Tuning, Bayesian Optimization, Python]
 ---
 
-In this project I build a credit card fraud detection model, and then put it through **three different tuning strategies** to understand what each one actually buys me.
+In this project I build a credit card fraud detection model, and then applied **three different tuning strategies** to understand how each of these work and their practical effects.
 
-I begin by establishing baseline models on a severely imbalanced dataset, where only **0.167%** of transactions are fraudulent. I then tune the model's hyperparameters two ways — exhaustively with **grid search**, and adaptively with **Bayesian optimization** using Optuna — before finally tuning the **decision threshold** on top of both tuned models.
+I begin by establishing baseline models on a highly imbalanced dataset, where only **0.167%** of transactions are fraudulent. I then tune the model's hyperparameters two ways: (1) exhaustively with **grid search**, and (2) adaptively with **Bayesian optimization** (using Optuna). Lastly, I tune the **decision threshold**.
 
 The insight running through the whole project is that these techniques are not competitors. Two of them tune the *model*; one of them tunes the *decision rule*. Understanding that difference is what turns a well-scoring classifier into a genuinely useful one.
 
@@ -41,7 +41,7 @@ Credit card fraud detection is a classic **extreme class imbalance** problem. In
 
 This creates a trap that catches a lot of first-pass models: a classifier that simply predicts "not fraud" for every single transaction achieves **99.83% accuracy** while catching precisely zero fraud. Any tuning process that optimises the wrong metric will happily walk straight into that trap.
 
-The business problem is also not symmetric. A missed fraud costs the money lost on the transaction. A false alarm costs an analyst's review time and annoys a legitimate customer. These are different currencies, and the right balance between them is a business decision, not a statistical one.
+The business problem is also not symmetric. A missed fraud costs the money lost on the transaction. A false alarm costs an analyst's review time and annoys a legitimate customer. These are different currencies, and finding the right balance between them is a business decision.
 
 ### Actions <a name="overview-actions"></a>
 
@@ -50,7 +50,6 @@ I built and compared a full tuning pipeline that:
 * Cleaned the data and removed duplicate records
 * Scaled the two non-anonymised features using `RobustScaler`
 * Established baselines with Random Forest, XGBoost and LightGBM
-* Selected **PR-AUC (average precision)** as the optimisation target instead of accuracy or ROC-AUC
 * Tuned hyperparameters **exhaustively** with `GridSearchCV`
 * Tuned hyperparameters **adaptively** with Optuna's TPE sampler and median pruning
 * Tuned the **decision threshold** on top of both tuned models, using out-of-fold predictions and three different business strategies
@@ -59,12 +58,13 @@ Throughout, I used stratified cross-validation so that every fold retained the s
 
 ### Results <a name="overview-results"></a>
 
-The headline finding is that **hyperparameter search and thresholding do completely different jobs**:
+Hyperparameter search and thresholding accomplish different things.
 
-* Hyperparameter search changes how well the model *ranks* transactions, which is what PR-AUC measures.
-* Thresholding never changes PR-AUC at all. It only chooses where to cut that ranking — trading precision against recall along a fixed curve.
+* Hyperparameter search changes how well the model *ranks* transactions (which is what PR-AUC measures).
+* Thresholding never changes PR-AUC at all and instead only chooses where to cut that ranking (between fraud/not fraud), trading precision against recall along a fixed curve.
 * On the baseline model, simply moving the cut-off from 0.5 to 0.7084 raised precision from 0.936 to 0.973 with no loss of recall at all.
 * Hitting a 90% recall target was possible but expensive: false alarms rose from 5 to 1,733.
+* A realistic thresholding exercise would likely be based on fixed resources like analyst capacity or workload.
 
 ### Growth/Next Steps <a name="overview-growth"></a>
 
@@ -100,7 +100,7 @@ Fraud (1): 473 transactions (0.167%)
 ```
 
 <br>
-**Why this matters:**  With only 473 positive examples in the entire dataset, every modelling decision from this point forward has to be made with the imbalance in mind. There is very little fraud to learn from, and a great deal of normal behaviour to be distracted by.
+With only 473 positive examples in the entire dataset, every modelling decision from this point forward has to be made with the imbalance in mind. There is very little fraud to learn from, and a great deal of normal behaviour to be distracted by.
 
 ___
 
@@ -463,7 +463,7 @@ ___
 
 Potential future enhancements include:
 
-* **Cost-sensitive thresholding.** Replace F1 with a real currency objective — expected fraud loss avoided minus review cost — so the threshold is chosen on money rather than on a symmetric statistic.
+* **Cost-sensitive thresholding.** Replace F1 with a real currency objective (i.e. expected fraud loss avoided minus review cost) so the threshold is chosen on money rather than on a symmetric statistic.
 * **Time-aware validation.** Transactions are ordered in time, and a random split lets the model learn from the future. A rolling time-based split would give a more honest estimate.
 * **Calibration analysis.** LightGBM's 0.02 baseline precision suggests severe miscalibration; Platt scaling or isotonic regression would make its probabilities directly comparable to XGBoost's.
 * **Ensembling.** The tuned XGBoost and LightGBM models make different errors, and averaging their probabilities is a cheap way to improve ranking.
