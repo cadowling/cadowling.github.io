@@ -1,0 +1,57 @@
+// Overrides the remote theme's _sass/0-settings/_colors.scss.
+// Dark palette: one background, slightly lighter cards, one muted teal accent.
+
+// Main Colors
+$primary-color: #4FB3A9;   // muted teal accent
+$secondary-color: #C19CD8;
+$highlight: #ffeea8;
+$text: #E6E8EB;            // primary text
+$gray-blue: #9AA3AF;       // muted text
+$white: #ffffff;
+$light-white: #C9CED6;     // secondary text
+$black: #14161B;           // header, footer, image placeholders
+$lighten-black: #232733;
+$blue-black: #14161B;      // page background
+$blue-darken: #1C1F26;     // cards / post body
+$green-darken: #2C3635;
+$danger: #e02f40;
+$success: #34a74e;
+
+
+// Background Colors
+$background: $blue-black;
+
+// Body Color
+$body-color: $text;
+
+// Headings
+$heading-font-color: #404040;
+
+// Links
+$link-color: $primary-color;
+$link-color-hover: lighten($link-color, 12%);
+
+// Button
+$button-color: $black;
+$button-background-color: $primary-color;
+
+// Border
+$border-color: #2A2F3A;
+
+/* syntax highlighting (base16) */
+$base00: #263238 !default;
+$base01: #2e3c43 !default;
+$base02: #314549 !default;
+$base03: #546e7a !default;
+$base04: #b2ccd6 !default;
+$base05: #eeffff !default;
+$base06: #eeffff !default;
+$base07: #ffffff !default;
+$base08: #f07178 !default;
+$base09: #f78c6c !default;
+$base0a: #ffcb6b !default;
+$base0b: #c3e88d !default;
+$base0c: #89ddff !default;
+$base0d: #82aaff !default;
+$base0e: #c792ea !default;
+$base0f: #ff5370 !default;
